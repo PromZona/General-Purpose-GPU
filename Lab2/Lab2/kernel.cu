@@ -42,34 +42,22 @@ __global__ void ssaaKernel(uchar4 * out, int wOut, int hOut, int widthSize, int 
 			result.x /= count;
 			result.y /= count;
 			result.z /= count;
-			out[y * wOut + x] = make_uchar4(result.x, result.y, result.z, 0);
+			out[y * wOut + x] = make_uchar4(result.x, result.y, result.z, 255);
 		}
 	}
 }
 
-int main()
+void Process(std::string inputFile, std::string outputFile, int widthOut, int heightOut)
 {
-	std::string inputFile;
-	std::string outputFile;
-	int widthOut, heightOut;
 	int widthInput, heightInput;
 
-	std::cin >> inputFile >> outputFile;
-	scanf("%d %d", &widthOut, &heightOut);
-
 	FILE* fp = fopen(inputFile.c_str(), "rb");
-	
+
 	fread(&widthInput, sizeof(int), 1, fp);
 	fread(&heightInput, sizeof(int), 1, fp);
 	uchar4* data = (uchar4*)malloc(sizeof(uchar4) * widthInput * heightInput);
 	fread(data, sizeof(uchar4), widthInput * heightInput, fp);
 	fclose(fp);
-
-	if (inputFile == "04.t")
-	{
-		fprintf(stderr, "Input size (WxH): %dx%d. Output size(WxH): %dx%d", widthInput, heightInput, widthOut, heightOut);
-		exit(0);
-	}
 
 	// Подготовка данных для текстуры
 	cudaArray* arr;
@@ -91,8 +79,25 @@ int main()
 
 	int widthSize = widthInput / widthOut;
 	int heightSize = heightInput / heightOut;
-	ssaaKernel<<<dim3(16, 16), dim3(16, 16) >>> (dev_out, widthOut, heightOut, widthSize, heightSize);
+
+
+	cudaEvent_t start, end;
+	CSC(cudaEventCreate(&start));
+	CSC(cudaEventCreate(&end));
+	CSC(cudaEventRecord(start));
+
+	ssaaKernel << <dim3(16, 16), dim3(16, 16) >> > (dev_out, widthOut, heightOut, widthSize, heightSize);
 	CSC(cudaGetLastError());
+
+	CSC(cudaEventRecord(end));
+	CSC(cudaEventSynchronize(end));
+	float t;
+	CSC(cudaEventElapsedTime(&t, start, end));
+	CSC(cudaEventDestroy(start));
+	CSC(cudaEventDestroy(end));
+
+	printf("time = %f ms\n", t);
+
 
 	CSC(cudaMemcpy(data, dev_out, sizeof(uchar4) * widthOut * heightOut, cudaMemcpyDeviceToHost));
 
@@ -109,5 +114,10 @@ int main()
 	fclose(fp);
 
 	free(data);
+}
+
+int main()
+{
+	Process("sample.data", "sampleOut.data", 250, 250);
     return 0;
 }
