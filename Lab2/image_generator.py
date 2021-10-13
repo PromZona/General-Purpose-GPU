@@ -1,7 +1,7 @@
 import numpy as np
 
-w = 8
-h = 8
+w = 1000
+h = 1000
 count = w * h
 data = np.random.rand(count)
 power = 2 ** 32

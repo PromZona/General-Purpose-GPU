@@ -1,32 +1,32 @@
-﻿#ifdef WIN32
-#include "cuda_runtime.h"
-#include "device_launch_parameters.h"
-#endif
-
+#define _CRT_SECURE_NO_WARNINGS
 #include <stdlib.h>
 #include <stdio.h>
 #include <fstream>
 #include <iostream>
 #include <vector>
 #include <iomanip>
+#include <chrono>
 
-#define CSC(call) 						\
-do {									\
-	cudaError_t	status = call;			\
-	if (status != cudaSuccess) {		\
-		fprintf(stderr, "ERROR in %s:%d. Massage: %s\n", __FILE__, __LINE__, cudaGetErrorString(status));			\
-		exit(0);						\
-	}									\
-} while(0)
+struct uchar4
+{
+	unsigned char x;
+	unsigned char y;
+	unsigned char z;
+	unsigned char w;
+};
 
-__constant__ double NORM_AVG[32][3];
+struct int2
+{
+	int x;
+	int y;
+};
 
-__device__ int get_class(uchar4 pixel, int nc)
+int get_class(uchar4 pixel, int nc, double norm_avg[32][3])
 {
 	double res[32]{};
 	for (int i = 0; i < nc; i++)
 	{
-		res[i] = pixel.x * NORM_AVG[i][0] + pixel.y * NORM_AVG[i][1] + pixel.z * NORM_AVG[i][2];
+		res[i] = pixel.x * norm_avg[i][0] + pixel.y * norm_avg[i][1] + pixel.z * norm_avg[i][2];
 	}
 	double maxEl = res[0];
 	int class_index = 0;
@@ -41,25 +41,20 @@ __device__ int get_class(uchar4 pixel, int nc)
 	return class_index;
 }
 
-__global__ void sam_kernel(uchar4 * data, int w, int h, int nc)
+void sam_kernel(uchar4* data, int w, int h, int nc, double norm_avg[32][3])
 {
-	int idx = blockDim.x * blockIdx.x + threadIdx.x;
-	int idy = blockDim.y * blockIdx.y + threadIdx.y;
-	int offsetx = blockDim.x * gridDim.x;
-	int offsety = blockDim.y * gridDim.y;
-
-	for (int x = idx; x < w; x += offsetx)
+	for (int x = 0; x < w; x++)
 	{
-		for (int y = idy; y < h; y += offsety)
+		for (int y = 0; y < h; y++)
 		{
-			data[x + y * w].w = get_class(data[x + y * w], nc);
+			data[x + y * w].w = get_class(data[x + y * w], nc, norm_avg);
 		}
 	}
 }
 
 void Process(std::string inputFile, std::string outputFile, int nc, std::vector<std::vector<int2>> classes)
 {
-	int widthInput, heightInput;	
+	int widthInput, heightInput;
 
 	// Image reading
 	FILE* fp = fopen(inputFile.c_str(), "rb");
@@ -104,30 +99,11 @@ void Process(std::string inputFile, std::string outputFile, int nc, std::vector<
 		avg[i][2] = b / norm;
 	}
 
-	CSC(cudaMemcpyToSymbol(NORM_AVG, avg, sizeof(double) * 32 * 3));
-
-	uchar4* dev_out;
-	CSC(cudaMalloc(&dev_out, image_size));
-	CSC(cudaMemcpy(dev_out, data, image_size, cudaMemcpyHostToDevice));
-
-
-	cudaEvent_t start, end;
-	CSC(cudaEventCreate(&start));
-	CSC(cudaEventCreate(&end));
-	CSC(cudaEventRecord(start));
-
-	sam_kernel << <dim3(16, 16), dim3(32, 32) >> > (dev_out, widthInput, heightInput, nc);
-	CSC(cudaGetLastError());
-
-	CSC(cudaEventRecord(end));
-	CSC(cudaEventSynchronize(end));
-	float t;
-	CSC(cudaEventElapsedTime(&t, start, end));
-	CSC(cudaEventDestroy(start));
-	CSC(cudaEventDestroy(end));
-	printf("time = %f ms\n", t);
-
-	CSC(cudaMemcpy(data, dev_out, image_size, cudaMemcpyDeviceToHost));
+	auto start = std::chrono::high_resolution_clock::now();
+	sam_kernel(data, widthInput, heightInput, nc, avg);
+	auto finish = std::chrono::high_resolution_clock::now();
+	std::chrono::duration<double, std::milli> elapsed = (finish - start);
+	printf("%f ms\n", elapsed.count());
 
 	fp = fopen(outputFile.c_str(), "wb");
 	fwrite(&widthInput, sizeof(int), 1, fp);
@@ -135,7 +111,6 @@ void Process(std::string inputFile, std::string outputFile, int nc, std::vector<
 	fwrite(data, sizeof(uchar4), widthInput * heightInput, fp);
 	fclose(fp);
 
-	CSC(cudaFree(dev_out));
 	free(data);
 }
 
@@ -161,6 +136,5 @@ int main()
 	Process("250x250.data", "250x250out.data", nc, classes);
 	Process("500x500.data", "500x500out.data", nc, classes);
 	Process("1000x1000.data", "1000x1000out.data", nc, classes);
-
     return 0;
 }
